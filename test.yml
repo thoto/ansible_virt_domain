@@ -1,0 +1,17 @@
+---
+- hosts: vms
+  gather_facts: False
+  tasks:
+    - set_fact:
+        hypervisor: "{{groups['hypervisor']|random}}"
+
+    - name: template VM definition
+      delegate_to: "{{ hypervisor }}"
+      template: src=dom.xml.j2 dest=/tmp/{{inventory_hostname}}-tpl.xml
+
+    - name: VM definition
+      delegate_to: "{{ hypervisor }}"
+      virt_domain:
+        name: "{{ inventory_hostname}}"
+        state: present
+#        xml: "{{ lookup('template','domain-tpl.xml.j2') }}"

@@ -1,0 +1,5 @@
+[vms]
+foodev2	mem="1048576" mem_unit="KiB" num_ifs=3
+
+[hypervisor]
+localhost	ansible_connection=local
