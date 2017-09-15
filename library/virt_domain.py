@@ -8,64 +8,82 @@ else:
     installed_libvirt_py = True
 
 import re  # to handle whitespace
-import xml.dom.minidom
-
-from pprint import pprint  # FIXME
+import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
-# from ansible.module_utils._text import to_native
+# from ansible.module_utils._text import to_native  # FIXME: use it
 
+def xml_by_tag_and_text(e):
+    """ returns dict of (tag -> list of tags) in e. """
+    r = {}
+    for i in e:
+        if i.tag not in r:
+            r[i.tag] = []
+        r[i.tag] += [i]
+    return r
 
-def strip_whitespace(s):
-    return re.sub(r"\s+", "", s, flags=re.UNICODE)
+def xml_text(e):
+    """ gets all direct text inside element """
+    t = e.text.strip() if e.text else ""  # text summary
+    for i in e:
+        t += i.tail.strip() if i.tail else ""
+        i.tail = "" # remove tail since we aggregate in l.text!
+    e.text = t
+    return t
 
+# def xml_match_or_alter(left,right,alter=True):
+def xml_cmp(left,right,alter=True):
+    ''' if alter is given: report change by returning false AND alter right
+    tree. otherwise just return false if a alteration of the right tree would
+    be needed. '''
+    assert left.tag == right.tag
+    ret = True
 
-def find_in(element, collection, function=lambda x, y: x == y):
-    return next((item for item in collection if function(element, item)), None)
+    # parse attribute equality
+    attr_add = {}
+    for lk,lv in left.attrib.iteritems():
+        if lk not in right.attrib or right.attrib[lk]!=lv:
+            if alter:
+                right.set(lk,lv)
+            ret = False
 
+    # sort elements by tag on each side
+    l_by_tag = xml_by_tag_and_text(left)
+    r_by_tag = xml_by_tag_and_text(right)
 
-def findElement(root, name):
-    f = lambda x, y: hasattr(y, "tagName") and y.tagName == x
-    return find_in(name, root, f)
+    # collect text content in l_text and r_text. this also manipulates
+    # left.text and right.text to avoid dealing with text between elements
+    # while altering text contents of elements. this also means text always
+    # appears in front of tree.
+    l_text = xml_text(left)
+    r_text = xml_text(right)
 
+    # compare text
+    if l_text != r_text:
+        ret = False
+        if alter:
+            right.text = l_text
 
-def xml_match(left, right):
-    ''' checks if all DOM elements on left tree are found in the right tree
-    and have the same attributes and values. Left and right tree could still
-    differ since the right one may contain elements which are not present on
-    the left.'''
-    # compare tag names
-    if not (hasattr(left, "tagName") and hasattr(right, "tagName") and
-            left.tagName == right.tagName):
-        return False
-
-    # compare attributes
-    for a in left.attributes.items():
-        if a[1] != right.getAttribute(a[0]):
-            return False
-
-    # compare child nodes for equality
-    for l in left.childNodes:
-        if hasattr(l, "tagName"):  # recurse on subtree
-            if not find_in(l, right.childNodes, xml_match):
-                # a matching subtree could not be found on right side
-                return False
-        elif hasattr(l, "data"):  # check plain element equality
-            if len(strip_whitespace(l.data)) != 0:  # skip whitespaces
-                if not find_in(l, right.childNodes,
-                               lambda x, y: x.data == y.data):
-                    # unable to find element on right side with identical data
-                    return False
+    for l in left:
+        if (len(l_by_tag[l.tag]) == 1 and l.tag in r_by_tag and
+                len(r_by_tag[l.tag]) == 1):
+            # 1:1 tag match so alter this element instead of adding a new one
+            ret = xml_cmp(l,r_by_tag[l.tag][0],alter) and ret
         else:
-            raise Exception("xml parsing error: unknown element")
-    else:
-        return True  # all nodes found a matching node on the right side
+            # got multiple elements: compare but don't alter each first
+            # after that add elements to the right side which could not be
+            # matched. this also adds left elements missing on right side.
+            # TODO: match each element just once! (remove best match?)
+            for r in r_by_tag[l.tag] if l.tag in r_by_tag else []:
+                if xml_cmp(l,r,False):
+                    break
+            else:
+                ret = False
+                if alter:  # notice: iterating over r_by_tag not right!
+                    right.append(l)
+    return ret
 
 
-# e=findElement(xml_dom.documentElement, "devices")
-# print xml_match(e, e)
-# print xml_match(xml_file.documentElement, xml_dom.documentElement)
-#
 # created: running but not defined! (intermediate) FIXME
 # absent: equals undefined
 # present: in any state not being undefined
@@ -76,7 +94,7 @@ def xml_match(left, right):
 all_states_neg = ['absent', 'undefined']
 all_states_soft = ['present', 'latest']
 all_states_pos_real = ['defined', 'running', 'paused']
-all_states_pos = all_states_soft + all_states_real
+all_states_pos = all_states_soft + all_states_pos_real
 all_states = all_states_neg + all_states_pos
 
 
@@ -85,12 +103,12 @@ def hard_state(state, default):
         A soft state may be something like 'latest' which means to keep the
         current state unless it is undefined. therefore the parameter default
         should be set to the current domain state'''
-    if param in all_states_pos_real:
-        return param
-    elif param in all_states_neg:
+    if state in all_states_pos_real:
+        return state
+    elif state in all_states_neg:
         return 'undefined'
     else:
-        return default
+        return default if default in all_states_pos_real else 'defined'
 
 
 def dom_state(domain):
@@ -126,9 +144,10 @@ def main():
     module = AnsibleModule(argument_spec=dict(
         name=dict(aliases=['guest']),
         state=dict(choices=all_states, default='present'),
-        force_state=dict(type='Bool', default=False),  # use 'destroy' if true
+        force_state=dict(type='bool', default=False),  # use 'destroy' if true
+        wait=dict(type='bool', default=False),
         uri=dict(default='qemu:///system'),
-        force_xml=dict(type='Bool', default=False),  # 'latest' regarless state
+        force_xml=dict(type='bool', default=False),  # 'latest' regarless state
         xml=dict(),
         sections=dict(),
     ))
@@ -160,28 +179,37 @@ def main():
     # find out what state the user wants the domain to be in
     desired_state = hard_state(module.params['state'], default=current_state)
 
+    curr_xml = None
+
     if current_state != desired_state:
-        if module.params['state'] in ['present', 'latest'] \
-                and current_state in all_states_pos:
-            pass  # dont touch.
-        else:
-            pass  # calculate transition
-    elif current_state == 'unknown':
-        pass  # put domain in state
+        result['changed'] = True
+    elif module.params['state'] == 'latest':
+        # fetch domains XML definition and compare to module paramters
+        curr_xml = ET.fromstring(domain_handle.XMLDesc(0))
+        result['current_xml'] = ET.tostring(curr_xml)
+        if 'xml' in module.params and module.params['xml']:
+            def_xml = ET.fromstring(module.params['xml'])
+            result['defined_xml'] = ET.tostring(def_xml)
+            match = xml_cmp(def_xml,curr_xml,True)
+            result['tree'] = ET.tostring(curr_xml)
+            if not match:
+                result['changed'] = True
+        if 'sections' in module.params and module.params['sections']:
+            pass  # FIXME
+        if not (('xml' in module.params and module.params['xml']) or
+                ('sections' in module.params and module.params['sections'])):
+            result['message'] = "neither XML nor sections were checked " + \
+                                "since none were given!"
     else:
-        pass
+        result['changed'] = False
 
+    if not module.check_mode and result['changed']:
+        # ensure xml to be written contains sections defined!
+        # merge with existing XML to keep things like mac addresses
+        pass  # really do something FIXME
 
-#    if not domain_handle:
-#        if not 'xml' in module.params or not module.params['xml']:
-#            module.fail_json(msg="domain not found and no definition given.")
+    module.exit_json(**result)
+
 
 if __name__ == '__main__':
     main()
-
-# xml_dom = xml.dom.minidom.parseString(vm_handle.XMLDesc(0))
-# xml_file = xml.dom.minidom.parseString(xml_raw_file)
-
-# pprint(xml_dom.documentElement.childNodes)
-# pprint(dir(xml_dom.documentElement))
-# print(vm_handle.XMLDesc(0))

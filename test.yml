@@ -13,5 +13,16 @@
       delegate_to: "{{ hypervisor }}"
       virt_domain:
         name: "{{ inventory_hostname}}"
-        state: present
-#        xml: "{{ lookup('template','domain-tpl.xml.j2') }}"
+        state: latest
+        xml: "{{ lookup('template','dom.xml.j2') }}"
+      register: out
+      # FIXME: model = Haswell ignore
+
+    - debug: msg="{{out.tree}}"
+
+#    - name: write xmls
+#      delegate_to: "{{ hypervisor }}"
+#      copy:
+#        content: "{{item.value}}"
+#        dest: /tmp/{{inventory_hostname}}-{{item.key}}.xml
+#      with_dict: "{{ {'current': out.current_xml, 'defined': out.defined_xml} }}"
