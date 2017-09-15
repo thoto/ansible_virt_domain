@@ -14,4 +14,4 @@
       virt_domain:
         name: "{{ inventory_hostname}}"
         state: present
-#        xml: "{{ lookup('template','domain-tpl.xml.j2') }}"
+        xml: "{{ lookup('template','dom.xml.j2') }}"

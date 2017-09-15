@@ -76,7 +76,7 @@ def xml_match(left, right):
 all_states_neg = ['absent', 'undefined']
 all_states_soft = ['present', 'latest']
 all_states_pos_real = ['defined', 'running', 'paused']
-all_states_pos = all_states_soft + all_states_real
+all_states_pos = all_states_soft + all_states_pos_real
 all_states = all_states_neg + all_states_pos
 
 
@@ -85,12 +85,12 @@ def hard_state(state, default):
         A soft state may be something like 'latest' which means to keep the
         current state unless it is undefined. therefore the parameter default
         should be set to the current domain state'''
-    if param in all_states_pos_real:
-        return param
-    elif param in all_states_neg:
+    if state in all_states_pos_real:
+        return state
+    elif state in all_states_neg:
         return 'undefined'
     else:
-        return default
+        return default if default in all_states_pos_real else 'defined'
 
 
 def dom_state(domain):
@@ -126,9 +126,9 @@ def main():
     module = AnsibleModule(argument_spec=dict(
         name=dict(aliases=['guest']),
         state=dict(choices=all_states, default='present'),
-        force_state=dict(type='Bool', default=False),  # use 'destroy' if true
+        force_state=dict(type='bool', default=False),  # use 'destroy' if true
         uri=dict(default='qemu:///system'),
-        force_xml=dict(type='Bool', default=False),  # 'latest' regarless state
+        force_xml=dict(type='bool', default=False),  # 'latest' regarless state
         xml=dict(),
         sections=dict(),
     ))
@@ -161,16 +161,27 @@ def main():
     desired_state = hard_state(module.params['state'], default=current_state)
 
     if current_state != desired_state:
-        if module.params['state'] in ['present', 'latest'] \
-                and current_state in all_states_pos:
-            pass  # dont touch.
-        else:
-            pass  # calculate transition
-    elif current_state == 'unknown':
-        pass  # put domain in state
+        # transition!
+        result['changed'] = True
+    elif module.params['state'] == 'latest':
+        # fetch domains XML definition and compare to module paramters
+#        dom_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
+#        if 'xml' in module.params and module.params['xml']:
+#            def_xml = xml.dom.minidom.parseString(module.params['xml'])
+#            if xml_match(def_xml.documentElement, dom_xml.documentElement):
+#                result['changed'] = True
+#        if 'sections' in module.params and module.params['sections']:
+        result['changed'] = True
+        pass  # FIXME
     else:
-        pass
+        result['changed'] = False
 
+    if not module.check_mode and result['changed']:
+        # ensure xml to be written contains sections defined!
+        # merge with existing XML to keep things like mac addresses
+        pass  # really do something FIXME
+
+    module.exit_json(**result)
 
 #    if not domain_handle:
 #        if not 'xml' in module.params or not module.params['xml']:
