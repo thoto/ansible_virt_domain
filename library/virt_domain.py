@@ -10,10 +10,8 @@ else:
 import re  # to handle whitespace
 import xml.dom.minidom
 
-from pprint import pprint  # FIXME
-
 from ansible.module_utils.basic import AnsibleModule
-# from ansible.module_utils._text import to_native
+# from ansible.module_utils._text import to_native  # FIXME: use it
 
 
 def strip_whitespace(s):
@@ -21,10 +19,13 @@ def strip_whitespace(s):
 
 
 def find_in(element, collection, function=lambda x, y: x == y):
+    '''applies function(element,i) to each element i in collection and
+    returns element if any matches or falsey None if not.'''
     return next((item for item in collection if function(element, item)), None)
 
 
-def findElement(root, name):
+def find_element(root, name):
+    '''gets element with tagName name out of nodelist but does not recurse.'''
     f = lambda x, y: hasattr(y, "tagName") and y.tagName == x
     return find_in(name, root, f)
 
@@ -62,9 +63,7 @@ def xml_match(left, right):
         return True  # all nodes found a matching node on the right side
 
 
-# e=findElement(xml_dom.documentElement, "devices")
-# print xml_match(e, e)
-# print xml_match(xml_file.documentElement, xml_dom.documentElement)
+# e=find_element(xml_dom.documentElement, "devices")
 #
 # created: running but not defined! (intermediate) FIXME
 # absent: equals undefined
@@ -160,19 +159,24 @@ def main():
     # find out what state the user wants the domain to be in
     desired_state = hard_state(module.params['state'], default=current_state)
 
+    curr_xml = None
+
     if current_state != desired_state:
         # transition!
         result['changed'] = True
     elif module.params['state'] == 'latest':
         # fetch domains XML definition and compare to module paramters
-#        dom_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
-#        if 'xml' in module.params and module.params['xml']:
-#            def_xml = xml.dom.minidom.parseString(module.params['xml'])
-#            if xml_match(def_xml.documentElement, dom_xml.documentElement):
-#                result['changed'] = True
-#        if 'sections' in module.params and module.params['sections']:
-        result['changed'] = True
-        pass  # FIXME
+        curr_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
+        if 'xml' in module.params and module.params['xml']:
+            def_xml = xml.dom.minidom.parseString(module.params['xml'])
+            if xml_match(def_xml.documentElement, curr_xml.documentElement):
+                result['changed'] = True
+        if 'sections' in module.params and module.params['sections']:
+            pass  # FIXME
+        if not (('xml' in module.params and module.params['xml']) or
+                ('sections' in module.params and module.params['sections'])):
+            result['message'] = "neither XML nor sections were checked " + \
+                                "since none were given!"
     else:
         result['changed'] = False
 
@@ -183,16 +187,6 @@ def main():
 
     module.exit_json(**result)
 
-#    if not domain_handle:
-#        if not 'xml' in module.params or not module.params['xml']:
-#            module.fail_json(msg="domain not found and no definition given.")
 
 if __name__ == '__main__':
     main()
-
-# xml_dom = xml.dom.minidom.parseString(vm_handle.XMLDesc(0))
-# xml_file = xml.dom.minidom.parseString(xml_raw_file)
-
-# pprint(xml_dom.documentElement.childNodes)
-# pprint(dir(xml_dom.documentElement))
-# print(vm_handle.XMLDesc(0))
