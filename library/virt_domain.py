@@ -62,6 +62,86 @@ def xml_match(left, right):
     else:
         return True  # all nodes found a matching node on the right side
 
+import xml.etree.ElementTree as ET
+
+
+# FIXME: use getiterator for backward compatiblity
+xml_fail_tag, xml_fail_attr, xml_fail_content, xml_fail_tree = range(1,5)
+
+def xml_collect_text(element):
+    text = element.text or ""
+    for sub in element:
+        text += element.tail or ""
+    return text
+
+def xml_cmp_element(left,right):
+    assert left.tag == right.tag
+
+    mismatch = {}
+    for left_key, left_val in left.attrib.iteritems():
+        if left_key not in right.attrib or left_val != right.attrib[left_key]:
+            if 'attr' not in mismatch:
+                mismatch['attr'] = []
+            mismatch['attr'] += [{left_key: left_val}]
+
+    text = xml_collect_text(left)
+    if len(text) != 0 and text != xml_collect_text(right):
+        mismatch['content'] = text
+
+    m = xml_cmp_real(left,r)
+    if len(m) > 0:
+        mismatch['subtree'] = {left.tag: m}
+
+    return mismatch
+
+
+def xml_cmp_real(left,right):
+    for left_child in left:
+        left_num = len(filter(lambda x: x.tag == left_child.tag,left))
+        right_match = filter(lambda x: x.tag == left_child.tag,right)
+        right_num = len(right_match)
+        for r in right_match:
+            m = xml_cmp_element(left_child,r)
+            if len(m) == 0:
+                break  # found matching element
+        else:
+            if left_num > 1 or right_num > 1:
+                # got mismatch: ADD element
+            else len(mismatch)>0:
+                # got mismatch: FIX element
+
+
+def xml_cmp(left,right):
+    out = ""
+    # match tag names
+    if left.tag!=right.tag:
+        return False, 1, None
+
+    # check if each attribute is present and values match in right subtree
+    for left_key,left_val in left.attrib.iteritems():
+        if left_key not in right.attrib or left_val != right.attrib[left_key]:
+            return False, 2, 'no match on attribute '+left_key
+
+    # check if content of attribute matches
+    if len(left) == 0:
+        if left.text:
+            return left.text==right.text, 3, left.tag+": "+left.text
+
+    for left_child in left:
+        va=[]
+        for right_child in right:
+            b,val,diag=xml_cmp(left_child,right_child)
+            if b:
+                break
+            elif val!=1:
+                va+=[{'e': right_child.tag, 'val': val, 'diag': diag}]
+        else:
+            return False, 4, {'e': left_child.tag, 'va': va}
+    return True, 0, None
+
+#    return dir(left)
+
+
 
 # e=find_element(xml_dom.documentElement, "devices")
 #
@@ -162,15 +242,21 @@ def main():
     curr_xml = None
 
     if current_state != desired_state:
-        # transition!
         result['changed'] = True
     elif module.params['state'] == 'latest':
         # fetch domains XML definition and compare to module paramters
-        curr_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
+#        curr_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
+        curr_xml = ET.fromstring(domain_handle.XMLDesc(0))
+#        result['current_xml'] = curr_xml.documentElement.toxml()
+        result['current_xml'] = ET.tostring(curr_xml)
         if 'xml' in module.params and module.params['xml']:
-            def_xml = xml.dom.minidom.parseString(module.params['xml'])
-            if xml_match(def_xml.documentElement, curr_xml.documentElement):
-                result['changed'] = True
+#            def_xml = xml.dom.minidom.parseString(module.params['xml'])
+            def_xml = ET.fromstring(module.params['xml'])
+#            result['defined_xml'] = def_xml.documentElement.toxml()
+            result['defined_xml'] = ET.tostring(def_xml)
+            result['tree'] = xml_cmp(def_xml,curr_xml)
+#            if not xml_match(def_xml.documentElement, curr_xml.documentElement):
+#                result['changed'] = True
         if 'sections' in module.params and module.params['sections']:
             pass  # FIXME
         if not (('xml' in module.params and module.params['xml']) or
