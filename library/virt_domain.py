@@ -64,84 +64,53 @@ def xml_match(left, right):
 
 import xml.etree.ElementTree as ET
 
+def xml_by_tag(tree):
+    t_all={}
+    text=tree.text.strip()
+    for i in tree:
+        if i.tag not in t_all:
+            t_all[i.tag]=[]
+        t_all[i.tag] += [i]
+        text+=i.tail.strip()
+    return t_all,text
 
-# FIXME: use getiterator for backward compatiblity
-xml_fail_tag, xml_fail_attr, xml_fail_content, xml_fail_tree = range(1,5)
-
-def xml_collect_text(element):
-    text = element.text or ""
-    for sub in element:
-        text += element.tail or ""
-    return text
-
-def xml_cmp_element(left,right):
-    assert left.tag == right.tag
-
-    mismatch = {}
+def xml_match_attributes(left,right):
+    change={}
     for left_key, left_val in left.attrib.iteritems():
         if left_key not in right.attrib or left_val != right.attrib[left_key]:
-            if 'attr' not in mismatch:
-                mismatch['attr'] = []
-            mismatch['attr'] += [{left_key: left_val}]
+            change[left_key] = [left_val]
+    return change
 
-    text = xml_collect_text(left)
-    if len(text) != 0 and text != xml_collect_text(right):
-        mismatch['content'] = text
-
-    m = xml_cmp_real(left,r)
-    if len(m) > 0:
-        mismatch['subtree'] = {left.tag: m}
-
-    return mismatch
-
-
-def xml_cmp_real(left,right):
-    for left_child in left:
-        left_num = len(filter(lambda x: x.tag == left_child.tag,left))
-        right_match = filter(lambda x: x.tag == left_child.tag,right)
-        right_num = len(right_match)
-        for r in right_match:
-            m = xml_cmp_element(left_child,r)
-            if len(m) == 0:
-                break  # found matching element
-        else:
-            if left_num > 1 or right_num > 1:
-                # got mismatch: ADD element
-            else len(mismatch)>0:
-                # got mismatch: FIX element
-
+def xml_equals(left,right):
+#    assert left.tag == right.tag
+    return False
 
 def xml_cmp(left,right):
-    out = ""
-    # match tag names
-    if left.tag!=right.tag:
-        return False, 1, None
+    assert left.tag==right.tag
+    l_all,l_text=xml_by_tag(left)
+    r_all,r_text=xml_by_tag(right)
 
-    # check if each attribute is present and values match in right subtree
-    for left_key,left_val in left.attrib.iteritems():
-        if left_key not in right.attrib or left_val != right.attrib[left_key]:
-            return False, 2, 'no match on attribute '+left_key
-
-    # check if content of attribute matches
-    if len(left) == 0:
-        if left.text:
-            return left.text==right.text, 3, left.tag+": "+left.text
-
-    for left_child in left:
-        va=[]
-        for right_child in right:
-            b,val,diag=xml_cmp(left_child,right_child)
-            if b:
-                break
-            elif val!=1:
-                va+=[{'e': right_child.tag, 'val': val, 'diag': diag}]
+    todo=[]
+    for ltag,lelements in l_all.iteritems():
+        if len(lelements)==1 and len(r_all[ltag])==1:
+#            todo+=[str((str(lelements[0]),str(r_all[ltag][0])))]
+            am=xml_match_attributes(lelements[0],r_all[ltag][0])
+            if len(am)>0:
+                todo+=["edit element attributes "+str(r_all[ltag][0])]
+            if not xml_equals(lelements[0],r_all[ltag][0]):
+                todo+=["edit element "+str(r_all[ltag][0])]
         else:
-            return False, 4, {'e': left_child.tag, 'va': va}
-    return True, 0, None
+            for l in lelements:
+                for r in r_all[ltag]:
+                    if xml_equals(l,r):
+                        r_all[ltag].remove(r)  # to avoid matching twice
+                        break  # continue with next left-side element
+                else: # didnt find element: add a new one!
+                    todo+="add element "+str(l)
+                    # add to right tree
 
-#    return dir(left)
-
-
+    return todo
+#    return ((l_all,l_text),(r_all,r_text),todo)
 
 # e=find_element(xml_dom.documentElement, "devices")
 #
@@ -254,6 +223,7 @@ def main():
             def_xml = ET.fromstring(module.params['xml'])
 #            result['defined_xml'] = def_xml.documentElement.toxml()
             result['defined_xml'] = ET.tostring(def_xml)
+#            result['tree'] = xml_cmp(def_xml.find("devices"),curr_xml.find("devices"))
             result['tree'] = xml_cmp(def_xml,curr_xml)
 #            if not xml_match(def_xml.documentElement, curr_xml.documentElement):
 #                result['changed'] = True
