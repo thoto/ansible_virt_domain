@@ -8,112 +8,82 @@ else:
     installed_libvirt_py = True
 
 import re  # to handle whitespace
-import xml.dom.minidom
+import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 # from ansible.module_utils._text import to_native  # FIXME: use it
 
+def xml_by_tag_and_text(e):
+    """ returns dict of (tag -> list of tags) in e. """
+    r = {}
+    for i in e:
+        if i.tag not in r:
+            r[i.tag] = []
+        r[i.tag] += [i]
+    return r
 
-def strip_whitespace(s):
-    return re.sub(r"\s+", "", s, flags=re.UNICODE)
+def xml_text(e):
+    """ gets all direct text inside element """
+    t = e.text.strip() if e.text else ""  # text summary
+    for i in e:
+        t += i.tail.strip() if i.tail else ""
+        i.tail = "" # remove tail since we aggregate in l.text!
+    e.text = t
+    return t
 
+# def xml_match_or_alter(left,right,alter=True):
+def xml_cmp(left,right,alter=True):
+    ''' if alter is given: report change by returning false AND alter right
+    tree. otherwise just return false if a alteration of the right tree would
+    be needed. '''
+    assert left.tag == right.tag
+    ret = True
 
-def find_in(element, collection, function=lambda x, y: x == y):
-    '''applies function(element,i) to each element i in collection and
-    returns element if any matches or falsey None if not.'''
-    return next((item for item in collection if function(element, item)), None)
+    # parse attribute equality
+    attr_add = {}
+    for lk,lv in left.attrib.iteritems():
+        if lk not in right.attrib or right.attrib[lk]!=lv:
+            if alter:
+                right.set(lk,lv)
+            ret = False
 
+    # sort elements by tag on each side
+    l_by_tag = xml_by_tag_and_text(left)
+    r_by_tag = xml_by_tag_and_text(right)
 
-def find_element(root, name):
-    '''gets element with tagName name out of nodelist but does not recurse.'''
-    f = lambda x, y: hasattr(y, "tagName") and y.tagName == x
-    return find_in(name, root, f)
+    # collect text content in l_text and r_text. this also manipulates
+    # left.text and right.text to avoid dealing with text between elements
+    # while altering text contents of elements. this also means text always
+    # appears in front of tree.
+    l_text = xml_text(left)
+    r_text = xml_text(right)
 
+    # compare text
+    if l_text != r_text:
+        ret = False
+        if alter:
+            right.text = l_text
 
-def xml_match(left, right):
-    ''' checks if all DOM elements on left tree are found in the right tree
-    and have the same attributes and values. Left and right tree could still
-    differ since the right one may contain elements which are not present on
-    the left.'''
-    # compare tag names
-    if not (hasattr(left, "tagName") and hasattr(right, "tagName") and
-            left.tagName == right.tagName):
-        return False
-
-    # compare attributes
-    for a in left.attributes.items():
-        if a[1] != right.getAttribute(a[0]):
-            return False
-
-    # compare child nodes for equality
-    for l in left.childNodes:
-        if hasattr(l, "tagName"):  # recurse on subtree
-            if not find_in(l, right.childNodes, xml_match):
-                # a matching subtree could not be found on right side
-                return False
-        elif hasattr(l, "data"):  # check plain element equality
-            if len(strip_whitespace(l.data)) != 0:  # skip whitespaces
-                if not find_in(l, right.childNodes,
-                               lambda x, y: x.data == y.data):
-                    # unable to find element on right side with identical data
-                    return False
+    for l in left:
+        if (len(l_by_tag[l.tag]) == 1 and l.tag in r_by_tag and
+                len(r_by_tag[l.tag]) == 1):
+            # 1:1 tag match so alter this element instead of adding a new one
+            ret = xml_cmp(l,r_by_tag[l.tag][0],alter) and ret
         else:
-            raise Exception("xml parsing error: unknown element")
-    else:
-        return True  # all nodes found a matching node on the right side
+            # got multiple elements: compare but don't alter each first
+            # after that add elements to the right side which could not be
+            # matched. this also adds left elements missing on right side.
+            # TODO: match each element just once! (remove best match?)
+            for r in r_by_tag[l.tag] if l.tag in r_by_tag else []:
+                if xml_cmp(l,r,False):
+                    break
+            else:
+                ret = False
+                if alter:  # notice: iterating over r_by_tag not right!
+                    right.append(l)
+    return ret
 
-import xml.etree.ElementTree as ET
 
-def xml_by_tag(tree):
-    t_all={}
-    text=tree.text.strip()
-    for i in tree:
-        if i.tag not in t_all:
-            t_all[i.tag]=[]
-        t_all[i.tag] += [i]
-        text+=i.tail.strip()
-    return t_all,text
-
-def xml_match_attributes(left,right):
-    change={}
-    for left_key, left_val in left.attrib.iteritems():
-        if left_key not in right.attrib or left_val != right.attrib[left_key]:
-            change[left_key] = [left_val]
-    return change
-
-def xml_equals(left,right):
-#    assert left.tag == right.tag
-    return False
-
-def xml_cmp(left,right):
-    assert left.tag==right.tag
-    l_all,l_text=xml_by_tag(left)
-    r_all,r_text=xml_by_tag(right)
-
-    todo=[]
-    for ltag,lelements in l_all.iteritems():
-        if len(lelements)==1 and len(r_all[ltag])==1:
-#            todo+=[str((str(lelements[0]),str(r_all[ltag][0])))]
-            am=xml_match_attributes(lelements[0],r_all[ltag][0])
-            if len(am)>0:
-                todo+=["edit element attributes "+str(r_all[ltag][0])]
-            if not xml_equals(lelements[0],r_all[ltag][0]):
-                todo+=["edit element "+str(r_all[ltag][0])]
-        else:
-            for l in lelements:
-                for r in r_all[ltag]:
-                    if xml_equals(l,r):
-                        r_all[ltag].remove(r)  # to avoid matching twice
-                        break  # continue with next left-side element
-                else: # didnt find element: add a new one!
-                    todo+="add element "+str(l)
-                    # add to right tree
-
-    return todo
-#    return ((l_all,l_text),(r_all,r_text),todo)
-
-# e=find_element(xml_dom.documentElement, "devices")
-#
 # created: running but not defined! (intermediate) FIXME
 # absent: equals undefined
 # present: in any state not being undefined
@@ -175,6 +145,7 @@ def main():
         name=dict(aliases=['guest']),
         state=dict(choices=all_states, default='present'),
         force_state=dict(type='bool', default=False),  # use 'destroy' if true
+        wait=dict(type='bool', default=False),
         uri=dict(default='qemu:///system'),
         force_xml=dict(type='bool', default=False),  # 'latest' regarless state
         xml=dict(),
@@ -214,19 +185,15 @@ def main():
         result['changed'] = True
     elif module.params['state'] == 'latest':
         # fetch domains XML definition and compare to module paramters
-#        curr_xml = xml.dom.minidom.parseString(domain_handle.XMLDesc(0))
         curr_xml = ET.fromstring(domain_handle.XMLDesc(0))
-#        result['current_xml'] = curr_xml.documentElement.toxml()
         result['current_xml'] = ET.tostring(curr_xml)
         if 'xml' in module.params and module.params['xml']:
-#            def_xml = xml.dom.minidom.parseString(module.params['xml'])
             def_xml = ET.fromstring(module.params['xml'])
-#            result['defined_xml'] = def_xml.documentElement.toxml()
             result['defined_xml'] = ET.tostring(def_xml)
-#            result['tree'] = xml_cmp(def_xml.find("devices"),curr_xml.find("devices"))
-            result['tree'] = xml_cmp(def_xml,curr_xml)
-#            if not xml_match(def_xml.documentElement, curr_xml.documentElement):
-#                result['changed'] = True
+            match = xml_cmp(def_xml,curr_xml,True)
+            result['tree'] = ET.tostring(curr_xml)
+            if not match:
+                result['changed'] = True
         if 'sections' in module.params and module.params['sections']:
             pass  # FIXME
         if not (('xml' in module.params and module.params['xml']) or

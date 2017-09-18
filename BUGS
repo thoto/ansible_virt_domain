@@ -1,0 +1,12 @@
+* left subtree matches right subtree item multiple times
+    ( e.g. multiple network interfaces without additional parameters)
+	( {% for i in range(num_ifs) %} <interface ... </interface> {% endfor %}
+    this is quite complicated since we need a best-match algorithm or indicate
+    how many additional parameters are defined. this may also be solved by some
+    kind of workaround
+* implement 'created' (running but not defined)
+* implement "saved" state by adding a path to a savefile
+* test text encoding
+* implement sections: ignore section or ensure section is present based on
+    xpath. this may as well mean that a xml argument is not necessary.
+    (e.g. <model fallback='allow'>Haswell</model> will always be replaced)
