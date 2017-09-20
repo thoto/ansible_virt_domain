@@ -6,7 +6,8 @@
     kind of workaround
 * implement 'created' (running but not defined)
 * implement "saved" state by adding a path to a savefile
-* test text encoding
+* test text encoding (UTF8, use to_native)
 * implement sections: ignore section or ensure section is present based on
     xpath. this may as well mean that a xml argument is not necessary.
     (e.g. <model fallback='allow'>Haswell</model> will always be replaced)
+* test python versions 2.6 and 3
