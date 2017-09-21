@@ -11,3 +11,10 @@
     xpath. this may as well mean that a xml argument is not necessary.
     (e.g. <model fallback='allow'>Haswell</model> will always be replaced)
 * test python versions 2.6 and 3
+* implement timeout (wait)
+* log libvirt error handler messages.
+* state=undefined and latest=true throws error
+* defining transient domain fails
+* maybe do all state handling in state machine class?
+* write comments and cleanup code
+* autostart

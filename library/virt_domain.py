@@ -9,9 +9,11 @@ else:
 
 import re  # to handle whitespace
 import xml.etree.ElementTree as ET
+import functools
 
 from ansible.module_utils.basic import AnsibleModule
 # from ansible.module_utils._text import to_native  # FIXME: use it
+
 
 def xml_by_tag_and_text(e):
     """ returns dict of (tag -> list of tags) in e. """
@@ -22,17 +24,18 @@ def xml_by_tag_and_text(e):
         r[i.tag] += [i]
     return r
 
+
 def xml_text(e):
     """ gets all direct text inside element """
     t = e.text.strip() if e.text else ""  # text summary
     for i in e:
         t += i.tail.strip() if i.tail else ""
-        i.tail = "" # remove tail since we aggregate in l.text!
+        i.tail = ""  # remove tail since we aggregate in l.text!
     e.text = t
     return t
 
-# def xml_match_or_alter(left,right,alter=True):
-def xml_cmp(left,right,alter=True):
+
+def xml_cmp(left, right, alter=True):
     ''' if alter is given: report change by returning false AND alter right
     tree. otherwise just return false if a alteration of the right tree would
     be needed. '''
@@ -41,10 +44,10 @@ def xml_cmp(left,right,alter=True):
 
     # parse attribute equality
     attr_add = {}
-    for lk,lv in left.attrib.iteritems():
-        if lk not in right.attrib or right.attrib[lk]!=lv:
+    for lk, lv in left.attrib.iteritems():
+        if lk not in right.attrib or right.attrib[lk] != lv:
             if alter:
-                right.set(lk,lv)
+                right.set(lk, lv)
             ret = False
 
     # sort elements by tag on each side
@@ -68,20 +71,24 @@ def xml_cmp(left,right,alter=True):
         if (len(l_by_tag[l.tag]) == 1 and l.tag in r_by_tag and
                 len(r_by_tag[l.tag]) == 1):
             # 1:1 tag match so alter this element instead of adding a new one
-            ret = xml_cmp(l,r_by_tag[l.tag][0],alter) and ret
+            ret = xml_cmp(l, r_by_tag[l.tag][0], alter) and ret
         else:
             # got multiple elements: compare but don't alter each first
             # after that add elements to the right side which could not be
             # matched. this also adds left elements missing on right side.
             # TODO: match each element just once! (remove best match?)
             for r in r_by_tag[l.tag] if l.tag in r_by_tag else []:
-                if xml_cmp(l,r,False):
+                if xml_cmp(l, r, False):
                     break
             else:
                 ret = False
                 if alter:  # notice: iterating over r_by_tag not right!
                     right.append(l)
     return ret
+
+
+def xml_sections(left, right, sections):
+    return False
 
 
 # created: running but not defined! (intermediate) FIXME
@@ -138,26 +145,155 @@ def dom_state(domain):
     return states.get(dom_state, ('unknown', True))
 
 
+class virt_domain(object):
+    def __init__(self, domain_handle, conn, xml, wait):
+        self.domain_handle = domain_handle
+        self.conn = conn
+        self.xml = xml
+        self.wait = wait
+
+    def create(self):
+        # FIXME: implement wait (state=running)
+        self.domain_handle = self.conn.createXML(self.xml)  # TODO: Test
+        return self.domain_handle
+
+    def define(self):  # TODO: Test (+ state)
+        self.domain_handle = self.conn.defineXML(self.xml)
+        return self.domain_handle
+
+    def undefine(self):
+        return not self.domain_handle.undefine()  # TODO: Test (+ state)
+
+    def start(self):
+        # FIXME: implement wait (state=running)
+        res = not self.domain_handle.create()
+        return res  # TODO: Test
+
+    def _wait(self, target):
+        # TODO: check if state from array applies?
+        while True:  # FIXME: count and evaluate duration (self.wait)
+            try:
+                r = self.domain_handle.state()[0]
+            except libvirt.libvirtError as e:
+                if(e.get_error_code() != libvirt.VIR_ERR_NO_DOMAIN):
+                    return True
+            if r == target:
+                return True
+
+    def shutdown(self):
+        r = self.domain_handle.shutdown()
+        if self.wait:
+            self._wait(libvirt.VIR_DOMAIN_SHUTOFF)
+        return not r
+
+    def destroy(self):
+        r = self.domain_handle.destroy()
+        if self.wait:
+            self._wait(libvirt.VIR_DOMAIN_SHUTOFF)
+        return not r
+
+    def pause(self):
+        # FIXME: implement wait (state=?)
+        return self.domain_handle.suspend()  # TODO: Test
+
+    def resume(self):
+        # FIXME: implement wait (state=?)
+        return self.domain_handle.resume()  # TODO: Test
+
+
+def state_transition(current_state, target_state, transient=False,
+                     graceful=True):
+    assert(current_state != target_state)
+
+    # define the table of state transitions and functions to use
+    # function 'f' transitions from state 's' to state 'd'
+    if transient:  # transient means a domain has no 'defined' state
+        trans = [{'s': "undefined", 'd': "running", 'f': virt_domain.create},
+                 {'s': "defined", 'd': "undefined", 'f': virt_domain.undefine}]
+        off_target = "undefined"  # target state for shutdown
+    else:
+        trans = [{'s': "undefined", 'd': "defined", 'f': virt_domain.define},
+                 {'s': "defined", 'd': "running", 'f': virt_domain.start},
+                 {'s': "defined", 'd': "undefined", 'f': virt_domain.undefine}]
+        off_target = "defined"
+
+    if graceful:  # don't kill the vm using destroy but use shutdown
+        trans += [{'s': "running", 'd': off_target, 'f': virt_domain.shutdown}]
+    else:
+        trans += [{'s': "running", 'd': off_target, 'f': virt_domain.destroy}]
+
+    # other states (paused and saved for later use)
+    trans += [{'s': "running", 'd': "paused", 'f': virt_domain.pause},
+              {'s': "paused", 'd': "running", 'f': virt_domain.resume}]
+#              {'s': "running", 'd': "saved", 'f': f_save},
+#              {'s': "saved", 'd': "running", 'f': f_restore},]
+
+    def find_state(st_from, st_to, t):
+        """ find path from state 'st_from' to state 'st_to' using transition
+        table 't'. returns list of dicts from 't' along path """
+        # function does converge, but I'm not sure its result is always correct
+
+        # first try to find direct transition
+        t_match = [x for x in t if st_from == x['s'] and st_to == x['d']]
+        if t_match:
+            return [t_match[0]]
+        else:  # there is no direct transition so find path between states
+            # t_0: all transitions which originate from state st_from
+            t_0 = [x for x in t if st_from == x['s']]
+
+            # t_n: new transition table which does not contain transitions
+            # originating from state st_from. generating this new transition
+            # table for further processing makes the algorithm terminate
+            # since we never reach the originating state again.
+            t_n = [x for x in t if st_from != x['s'] and st_from != x['d']]
+
+            # find transition paths from destination states in 't_n' which
+            # lead to 'st_to'. this is a recusion so we always get paths.
+            r = [[x] + find_state(x['d'], st_to, t_n)
+                 for x in t_0 if find_state(x['d'], st_to, t_n)]
+
+            return min(r, key=len) if r else []  # find minimal transition path
+
+    def chain(a, b):
+        """ retuns a function which executes b(...) after a(...). """
+        return lambda *args, **kwargs: \
+            a(*args, **kwargs) and b(*args, **kwargs)
+
+    # return one (chained) function which transitions domain as defined
+    return functools.reduce(lambda x, y: chain(x, y['f']) if x else y['f'],
+                            find_state(current_state, target_state, trans),
+                            False)
+
+
+def eh_dummy(x, y):
+    """ dummy error handler to supress error messages to stderr """
+    pass
+
+
 def main():
     # domains in negative state can not be found
 
     module = AnsibleModule(argument_spec=dict(
         name=dict(aliases=['guest']),
         state=dict(choices=all_states, default='present'),
-        force_state=dict(type='bool', default=False),  # use 'destroy' if true
-        wait=dict(type='bool', default=False),
+        graceful=dict(type='bool', default=True),  # use 'destroy' if false
+        wait=dict(type='int', default=0),
         uri=dict(default='qemu:///system'),
-        force_xml=dict(type='bool', default=False),  # 'latest' regarless state
+        latest=dict(type='bool', default=False),  # 'latest' regarless state
         xml=dict(),
         sections=dict(),
-    ))
+        transient=dict(type='bool', default=False),  # TODO rename persistent?
+    ), supports_check_mode=True)
     result = dict(changed=False, message='')
 
     if not installed_libvirt_py:
         module.fail_json(msg="'libvirt' python library is missing on host.")
 
+    libvirt.registerErrorHandler(eh_dummy, 'ctx')  # apply dummy error handler
+
     # connect to libvirt host
-    conn = libvirt.open(module.params['uri'])
+    conn = libvirt.open(module.params['uri']) if not module.check_mode else \
+        libvirt.openReadOnly(module.params['uri'])
     if not conn:
         module.fail_json(msg="connection to libvirt failed.")
 
@@ -178,35 +314,64 @@ def main():
 
     # find out what state the user wants the domain to be in
     desired_state = hard_state(module.params['state'], default=current_state)
+    if module.params['transient'] and desired_state == "defined":
+        module.fail_json(msg="transient domain can not be defined.")
 
-    curr_xml = None
+    # xml defined at parameters
+    xml_def = ET.fromstring(module.params['xml']) \
+        if 'xml' in module.params and module.params['xml'] else None
+    if xml_def:
+        result['defined_xml'] = ET.tostring(xml_def)  # FIXME: remove!
+    # current domain definition (via dumpxml)
+    xml_curr = ET.fromstring(domain_handle.XMLDesc(0)) \
+        if domain_handle else None
+    if xml_curr:
+        result['current_xml'] = ET.tostring(xml_curr)  # FIXME: remove!
+    # xml to be applied by module
+    xml_apply = None
 
-    if current_state != desired_state:
-        result['changed'] = True
-    elif module.params['state'] == 'latest':
-        # fetch domains XML definition and compare to module paramters
-        curr_xml = ET.fromstring(domain_handle.XMLDesc(0))
-        result['current_xml'] = ET.tostring(curr_xml)
-        if 'xml' in module.params and module.params['xml']:
-            def_xml = ET.fromstring(module.params['xml'])
-            result['defined_xml'] = ET.tostring(def_xml)
-            match = xml_cmp(def_xml,curr_xml,True)
-            result['tree'] = ET.tostring(curr_xml)
-            if not match:
-                result['changed'] = True
+    # parse xml and find difference if 'latest' is specified
+    if current_state == 'undefined' and current_state != desired_state:
+        # there is no previous XML given, so apply xml definition
         if 'sections' in module.params and module.params['sections']:
-            pass  # FIXME
+            xml_sections(xml_def, None, module.params['sections'])
+        xml_apply = ET.tostring(xml_def)
+    elif module.params['state'] == 'latest' or module.params['latest']:
+        # calculate difference of currently running xml and desired xml
         if not (('xml' in module.params and module.params['xml']) or
                 ('sections' in module.params and module.params['sections'])):
-            result['message'] = "neither XML nor sections were checked " + \
-                                "since none were given!"
-    else:
-        result['changed'] = False
+            module.fail_json(msg="neither XML nor sections were defined " +
+                                 "but state should be latest.")
+
+        if 'sections' in module.params and module.params['sections']:
+            result['changed'] = \
+                xml_sections(xml_def, xml_curr, module.params['sections']) \
+                or result['changed']
+        if 'xml' in module.params and module.params['xml']:
+            xml_same = xml_cmp(xml_def, xml_curr, True)
+            result['tree'] = ET.tostring(xml_curr)
+            if not xml_same:
+                result['changed'] = True
+        xml_apply = ET.tostring(xml_curr)
+
+    # calculate state transition
+    method = None
+    if current_state != desired_state:
+        result['changed'] = True
+        method = state_transition(current_state, desired_state,
+                                  transient=module.params['transient'],
+                                  graceful=module.params['graceful'])
 
     if not module.check_mode and result['changed']:
-        # ensure xml to be written contains sections defined!
-        # merge with existing XML to keep things like mac addresses
-        pass  # really do something FIXME
+        if xml_apply and not current_state == "undefined":
+            conn.defineXML(xml_apply)
+        if method:
+            vd = virt_domain(domain_handle, conn, xml=xml_apply,
+                             wait=module.params['wait'])
+            st_result = method(vd)
+            if not st_result:
+                module.fail_json(msg="transitioning between states failed.",
+                                 res=st_result)
 
     module.exit_json(**result)
 
