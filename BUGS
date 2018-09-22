@@ -18,4 +18,5 @@
 * maybe do all state handling in state machine class?
 * write comments and cleanup code
 * autostart
+* unit attributes are not considered (e.g. on memory attribute: M vs. K)
 * virt_vol missing many features and needs a lot of improvement
