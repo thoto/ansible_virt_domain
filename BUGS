@@ -18,3 +18,4 @@
 * maybe do all state handling in state machine class?
 * write comments and cleanup code
 * autostart
+* virt_vol missing many features and needs a lot of improvement
