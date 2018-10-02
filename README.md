@@ -16,3 +16,7 @@ volume and never changes parameters on an existing volume. Since both modules
 share some code segments it might be considered to create a
 `module_utils` library.
 
+There is the `virt_domain_wait` module as well which just waits until the
+domain reaches the desired state. It does not try to change the state of the
+domain on its own. If one wants this, the equivalent `state` parameter on the
+`virt_domain` in conjunction with a defined `wait` time should be used.
