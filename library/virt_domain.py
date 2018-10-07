@@ -35,12 +35,14 @@ def xml_text(e):
     return t
 
 
-def xml_cmp(left, right, alter=True):
+def xml_cmp(left, right, alter=True, ignores={}):
     ''' if alter is given: report change by returning false AND alter right
     tree. otherwise just return false if a alteration of the right tree would
     be needed. '''
     assert left.tag == right.tag
     ret = True
+
+    my_ignores = ignores[left.tag] if left.tag in ignores else {}
 
     # parse attribute equality
     attr_add = {}
@@ -48,7 +50,12 @@ def xml_cmp(left, right, alter=True):
         if lk not in right.attrib or right.attrib[lk] != lv:
             if alter:
                 right.set(lk, lv)
-            ret = False
+            if alter:  # FIXME integrate below
+                ret = False
+            if lk not in my_ignores: # ignore certain matches
+                ret = False
+            else:
+                print "IGNORED l:"+lk+"="+lv+";"
 
     # sort elements by tag on each side
     l_by_tag = xml_by_tag_and_text(left)
@@ -71,16 +78,18 @@ def xml_cmp(left, right, alter=True):
         if (len(l_by_tag[l.tag]) == 1 and l.tag in r_by_tag and
                 len(r_by_tag[l.tag]) == 1):
             # 1:1 tag match so alter this element instead of adding a new one
-            ret = xml_cmp(l, r_by_tag[l.tag][0], alter) and ret
+            ret = xml_cmp(l, r_by_tag[l.tag][0], alter, my_ignores) and ret
         else:
-            # got multiple elements: compare but don't alter each first
-            # after that add elements to the right side which could not be
+            # got multiple elements: compare but don't alter each one first.
+            # After this add elements to the right side which could not be
             # matched. this also adds left elements missing on right side.
             # TODO: match each element just once! (remove best match?)
             for r in r_by_tag[l.tag] if l.tag in r_by_tag else []:
-                if xml_cmp(l, r, False):
+                if xml_cmp(l, r, False, my_ignores): # found match
+                    # apply changes on previously ignored attributes first
+                    ret = xml_cmp(l, r, True, my_ignores) and ret
                     break
-            else:
+            else: # none found: append whole subtree
                 ret = False
                 if alter:  # notice: iterating over r_by_tag not right!
                     right.append(l)
@@ -283,6 +292,7 @@ def main():
         xml=dict(),
         sections=dict(),
         transient=dict(type='bool', default=False),  # TODO rename persistent?
+        debug_out_path=dict(),
     ), supports_check_mode=True)
     result = dict(changed=False, message='')
 
@@ -320,7 +330,7 @@ def main():
     # xml defined at parameters
     xml_def = ET.fromstring(module.params['xml']) \
         if 'xml' in module.params and module.params['xml'] else None
-    if xml_def:
+    if xml_def: # FIXME Future warning here
         result['defined_xml'] = ET.tostring(xml_def)  # FIXME: remove!
     # current domain definition (via dumpxml)
     xml_curr = ET.fromstring(domain_handle.XMLDesc(0)) \
@@ -329,6 +339,8 @@ def main():
         result['current_xml'] = ET.tostring(xml_curr)  # FIXME: remove!
     # xml to be applied by module
     xml_apply = None
+
+    ignores = { "domain": { "devices": { "disk": { "boot": { "order": True } }, "interface": { "boot": { "order": True } } } } }
 
     # parse xml and find difference if 'latest' is specified
     if current_state == 'undefined' and current_state != desired_state:
@@ -348,7 +360,7 @@ def main():
                 xml_sections(xml_def, xml_curr, module.params['sections']) \
                 or result['changed']
         if 'xml' in module.params and module.params['xml']:
-            xml_same = xml_cmp(xml_def, xml_curr, True)
+            xml_same = xml_cmp(xml_def, xml_curr, True, ignores)
             result['tree'] = ET.tostring(xml_curr)
             if not xml_same:
                 result['changed'] = True
@@ -364,6 +376,10 @@ def main():
 
     if not module.check_mode and result['changed']:
         if xml_apply and not current_state == "undefined":
+            if 'debug_out_path' in module.params \
+                    and module.params['debug_out_path']:
+                with open(module.params['debug_out_path'],'w') as f:
+                    f.write(xml_apply)
             conn.defineXML(xml_apply)
         if method:
             vd = virt_domain(domain_handle, conn, xml=xml_apply,

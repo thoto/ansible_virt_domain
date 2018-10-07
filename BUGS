@@ -20,3 +20,9 @@
 * autostart
 * unit attributes are not considered (e.g. on memory attribute: M vs. K)
 * virt_vol missing many features and needs a lot of improvement
+* virt_vol does not compare XML definitions, therefore is unable to match
+    sizes and attributes of volumes
+* virt_domain_wait does not implement all states possible and shares code
+    with virt_domain module
+* look at all the FIXME and TODO comments inside source code
+* ignores features needs documentation and an module parameter
