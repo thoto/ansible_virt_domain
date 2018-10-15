@@ -34,11 +34,13 @@ def xml_text(e):
     e.text = t
     return t
 
+ign=""
 
 def xml_cmp(left, right, alter=True, ignores={}):
     ''' if alter is given: report change by returning false AND alter right
     tree. otherwise just return false if a alteration of the right tree would
     be needed. '''
+    global ign
     assert left.tag == right.tag
     ret = True
 
@@ -55,7 +57,7 @@ def xml_cmp(left, right, alter=True, ignores={}):
             if lk not in my_ignores: # ignore certain matches
                 ret = False
             else:
-                print "IGNORED l:"+lk+"="+lv+";"
+                ign+="IGNORED l:"+lk+"="+lv+";"
 
     # sort elements by tag on each side
     l_by_tag = xml_by_tag_and_text(left)
@@ -70,9 +72,13 @@ def xml_cmp(left, right, alter=True, ignores={}):
 
     # compare text
     if l_text != r_text:
-        ret = False
+        if my_ignores is not True:
+            ret = False
+        else:
+            ign+="IGNORED: "+l_text+" on "+left.tag
         if alter:
             right.text = l_text
+
 
     for l in left:
         if (len(l_by_tag[l.tag]) == 1 and l.tag in r_by_tag and
@@ -340,7 +346,15 @@ def main():
     # xml to be applied by module
     xml_apply = None
 
-    ignores = { "domain": { "devices": { "disk": { "boot": { "order": True } }, "interface": { "boot": { "order": True } } } } }
+    ignores = {
+            "domain": {
+                "devices": {
+                    "disk": { "boot": { "order": True } },
+                    "interface": { "boot": { "order": True } }
+                    },
+                "os": {"nvram": True }
+                }
+            }
 
     # parse xml and find difference if 'latest' is specified
     if current_state == 'undefined' and current_state != desired_state:
@@ -388,7 +402,8 @@ def main():
             if not st_result:
                 module.fail_json(msg="transitioning between states failed.",
                                  res=st_result)
-
+    global ign
+    result['ignored_parts']=ign
     module.exit_json(**result)
 
 
