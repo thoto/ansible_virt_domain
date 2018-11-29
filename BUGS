@@ -26,3 +26,5 @@
     with virt_domain module
 * look at all the FIXME and TODO comments inside source code
 * ignores features needs documentation and an module parameter
+* virt_net does not update autostart
+* virt_net does not validate network name in XML
