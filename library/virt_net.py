@@ -22,7 +22,7 @@ all_states=['present','absent']
 def define_net(conn,name,xmldef,autostart):
     # TODO: Ensure name matches XML
     net=conn.networkDefineXML(xmldef);
-    net.setAutostart(autostart)
+    net.setAutostart(1 if autostart else 0)
     net.create()
 
 
@@ -38,7 +38,7 @@ def main():
         name=dict(aliases=['net'],required=True),
         state=dict(choices=all_states, default='present'),
         uri=dict(default='qemu:///system'),
-        autostart=dict(default=True), # FIXME: change is not implemented yet
+        autostart=dict(type='bool',default=True), # FIXME: change is not implemented yet
         xml=dict(),
         ),
     supports_check_mode=True)
@@ -71,7 +71,8 @@ def main():
             module.fail_json(msg="you should define a xml")
 
         if not module.check_mode:
-            define_net(conn,module.params['name'],module.params['xml'])
+            define_net(conn,module.params['name'],module.params['xml'],
+                   module.params['autostart'])
     elif net_handle and module.params['state']=='absent':
         result['changed']=True
         if not module.check_mode:
