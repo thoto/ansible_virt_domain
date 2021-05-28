@@ -48,7 +48,7 @@ def xml_cmp(left, right, alter=True, ignores={}):
 
     # parse attribute equality
     attr_add = {}
-    for lk, lv in left.attrib.iteritems():
+    for lk, lv in left.attrib.items():
         if lk not in right.attrib or right.attrib[lk] != lv:
             if alter:
                 right.set(lk, lv)
@@ -337,12 +337,12 @@ def main():
     xml_def = ET.fromstring(module.params['xml']) \
         if 'xml' in module.params and module.params['xml'] else None
     if xml_def: # FIXME Future warning here
-        result['defined_xml'] = ET.tostring(xml_def)  # FIXME: remove!
+        result['defined_xml'] = ET.tostring(xml_def).decode()  # FIXME: remove!
     # current domain definition (via dumpxml)
     xml_curr = ET.fromstring(domain_handle.XMLDesc(0)) \
         if domain_handle else None
     if xml_curr:
-        result['current_xml'] = ET.tostring(xml_curr)  # FIXME: remove!
+        result['current_xml'] = ET.tostring(xml_curr).decode()  # FIXME: remove!
     # xml to be applied by module
     xml_apply = None
 
@@ -361,7 +361,7 @@ def main():
         # there is no previous XML given, so apply xml definition
         if 'sections' in module.params and module.params['sections']:
             xml_sections(xml_def, None, module.params['sections'])
-        xml_apply = ET.tostring(xml_def)
+        xml_apply = ET.tostring(xml_def).decode()
     elif module.params['state'] == 'latest' or module.params['latest']:
         # calculate difference of currently running xml and desired xml
         if not (('xml' in module.params and module.params['xml']) or
@@ -375,10 +375,10 @@ def main():
                 or result['changed']
         if 'xml' in module.params and module.params['xml']:
             xml_same = xml_cmp(xml_def, xml_curr, True, ignores)
-            result['tree'] = ET.tostring(xml_curr)
+            result['tree'] = ET.tostring(xml_curr).decode()
             if not xml_same:
                 result['changed'] = True
-        xml_apply = ET.tostring(xml_curr)
+        xml_apply = ET.tostring(xml_curr).decode()
 
     # calculate state transition
     method = None
