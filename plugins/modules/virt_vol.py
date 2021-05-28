@@ -31,7 +31,7 @@ def get_capacity(capdef):
     
 
 def define_vol(pool,name,capacity,thin=True):
-    pool.createXML("<volume type='block'> <name>%s</name> "%name +
+    return pool.createXML("<volume type='block'> <name>%s</name> "%name +
         "<capacity unit='%s'>%s</capacity>"%(capacity['unit'],
             capacity['value']) +
         ("<allocation>0</allocation>" if thin else "") + "</volume>")
@@ -89,14 +89,19 @@ def main():
             module.fail_json(msg="invalid capacity format")
 
         if not module.check_mode:
-            define_vol(pool_handle,module.params['name'],capacity,
-                    thin=(module.params['allocation']=='thin'))
-    elif disk_handle and module.params['state']=='absent':
+            disk_handle = define_vol(
+                pool_handle, module.params['name'], capacity,
+                thin=(module.params['allocation'] == 'thin'))
+    elif disk_handle and module.params['state'] == 'absent':
         result['changed']=True
         if not module.check_mode:
             undefine_vol(disk_handle)
+            disk_handle = None
 
+    if disk_handle:
+        result['disk_path'] =  disk_handle.path()
     module.exit_json(**result)
-        
+
+
 if __name__ == '__main__':
     main()
