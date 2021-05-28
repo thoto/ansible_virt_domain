@@ -9,21 +9,18 @@ except ImportError:
 else:
     installed_libvirt_py = True
 
-import re
-
 from ansible.module_utils.basic import AnsibleModule
+
 
 def eh_dummy(x, y):
     """ dummy error handler to supress error messages to stderr """
     pass
 
-all_states=['present','absent']
 
-def define_net(conn,name,xmldef,autostart):
+def define_net(conn, name, xmldef, autostart):
     # TODO: Ensure name matches XML
-    net=conn.networkDefineXML(xmldef);
-    net.setAutostart(1 if autostart else 0)
-    net.create()
+    net = conn.networkDefineXML(xmldef)
+    return net
 
 
 def undefine_net(net_handle):
@@ -31,17 +28,28 @@ def undefine_net(net_handle):
         net_handle.destroy()
     net_handle.undefine()
 
-all_states=['present','absent','leases']
+
+def get_net_handle(conn, module, name):
+    net_handle = None
+    try:
+        net_handle = conn.networkLookupByName(name)
+    except libvirt.libvirtError as e:
+        if e.get_error_code() != libvirt.VIR_ERR_NO_NETWORK:
+            module.fail_json(msg=str(e), debug=(e.get_error_code(), str(e)))
+    return net_handle
+
+
+all_states = ['started', 'stopped', 'present', 'absent', 'leases']
+
 
 def main():
     module = AnsibleModule(argument_spec=dict(
-        name=dict(aliases=['net'],required=True),
-        state=dict(choices=all_states, default='present'),
-        uri=dict(default='qemu:///system'),
-        autostart=dict(type='bool',default=True), # FIXME: change is not implemented yet
-        xml=dict(),
-        ),
-    supports_check_mode=True)
+            name=dict(aliases=['net'], required=True),
+            state=dict(choices=all_states, default='present'),
+            uri=dict(default='qemu:///system'),
+            autostart=dict(type='bool', default=True),
+            xml=dict(),
+        ), supports_check_mode=True)
     result = dict(changed=False, message='')
 
     if not installed_libvirt_py:
@@ -54,36 +62,57 @@ def main():
     if not conn:
         module.fail_json(msg="connection to libvirt failed.")
 
-    net_handle = None
-
     # look for network
-    try:
-        net_handle = conn.networkLookupByName(module.params['name'])
-    except libvirt.libvirtError as e:
-        if e.get_error_code() != libvirt.VIR_ERR_NO_NETWORK:
-            module.fail_json(msg=str(e), debug=(e.get_error_code(), str(e)))
+    net_handle = get_net_handle(conn, module, module.params['name'])
 
     # apply state
-    if not net_handle and module.params['state']=='present':
-        result['changed']=True
+    if not net_handle:
+        if module.params['state'] in ('present', 'started'):
+            result['changed'] = True
 
-        if not 'xml' in module.params or not module.params['xml']:
-            module.fail_json(msg="you should define a xml")
+            if 'xml' not in module.params or not module.params['xml']:
+                module.fail_json(msg="you should define a xml")
 
-        if not module.check_mode:
-            define_net(conn,module.params['name'],module.params['xml'],
-                   module.params['autostart'])
-    elif net_handle and module.params['state']=='absent':
-        result['changed']=True
-        if not module.check_mode:
-            undefine_net(net_handle)
-    elif module.params['state']=='leases':
-        if not net_handle:
-            module.fail_json(msg="net does not exist")
-        result['changed']=False
-        result['leases']=net_handle.DHCPLeases()
+            if not module.check_mode:
+                net_handle = define_net(
+                    conn, module.params['name'], module.params['xml'],
+                    )
+        elif module.params['state'] == 'leases':
+            if not net_handle:
+                module.fail_json(msg="net does not exist")
+        # absent and stopped do not matter
+    elif net_handle:
+        if module.params['state'] == 'absent':
+            result['changed'] = True
+            if not module.check_mode:
+                undefine_net(net_handle)
+
+    if net_handle and module.params['state'] == 'started':
+        if not net_handle.isActive():
+            result['changed'] = True
+            if not module.check_mode:
+                net_handle.create()
+    elif module.params['state'] == 'stopped':
+        if net_handle and not net_handle.isActive():
+            result['changed'] = True
+            if not module.check_mode:
+                net_handle.destroy()
+
+    if net_handle:
+        if not module.params['autostart'] and net_handle.autostart():
+            result['changed'] = True
+            if not module.check_mode:
+                net_handle.setAutostart(0)
+        elif module.params['autostart'] and not net_handle.autostart():
+            result['changed'] = True
+            if not module.check_mode:
+                net_handle.setAutostart(1)
+
+    if net_handle:
+        result['leases'] = net_handle.DHCPLeases()
 
     module.exit_json(**result)
-        
+
+
 if __name__ == '__main__':
     main()
